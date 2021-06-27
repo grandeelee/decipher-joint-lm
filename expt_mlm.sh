@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-WORKDIR="/home/grandee/grandee/projects/TACL_v1"
+WORKDIR=$(pwd)
 DATASET=${4}
 CONFIG="bert-tiny"
 TOKENIZER=${5}
