@@ -19,7 +19,7 @@ export seed=${1}
 	--do_train \
 	--do_eval \
 	--logging_dir runs/${DATASET}_mlm_${seed} \
-	--per_gpu_train_batch_size 512 \
+	--per_gpu_train_batch_size 384 \
 	--num_train_epochs ${epoch} \
 	--warmup_steps 50 \
 	--logging_steps ${save} \
@@ -27,7 +27,7 @@ export seed=${1}
 	--overwrite_output_dir \
 	--block_size 128 \
 	--eval_data_file ${WORKDIR}/data/${DATASET}_valid.txt \
-	--per_gpu_eval_batch_size 512 \
+	--per_gpu_eval_batch_size 384 \
 	--seed ${seed} \
 	--gradient_accumulation_steps 1 \
 	--weight_decay 0.01 \

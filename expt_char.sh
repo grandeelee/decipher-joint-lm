@@ -7,7 +7,7 @@
 #SBATCH --mem-per-cpu=8000MB
 #SBATCH -n 4
 
-WORKDIR=$(pwd)
+WORKDIR="/home/grandee/grandee/projects/TACL_v1"
 DATASET="cached_102_NT"
 CONFIG="bert-tiny"
 TOKENIZER="102"

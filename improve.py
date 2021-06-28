@@ -23,6 +23,7 @@ import json
 import logging
 import math
 import os
+import pickle
 from dataclasses import dataclass, field
 from glob import glob
 from typing import Optional
@@ -48,7 +49,7 @@ from transformers import (
     set_seed,
 )
 from transformers.trainer_utils import is_main_process
-from utils.utils import _sorted_checkpoints
+from utils.utils import _sorted_checkpoints_from_path, get_unigram_from_tokenized
 
 logger = logging.getLogger(__name__)
 
@@ -82,13 +83,15 @@ class ModelArguments:
         default=None,
         metadata={"help": "Where do you want to store the pretrained models downloaded from huggingface.co"},
     )
-    should_continue: bool = field(
-        default=False,
-        metadata={"help": "Set true to retrain from last checkpoint"}
-    )
     improve_list: str = field(
         default="low_freq",
         metadata={"help": "choose which set of vocab to improve"}
+    )
+    load_model_from: str = field(
+        default=None,
+        metadata={
+            "help": "The model checkpoint for weights initialization. Leave None if you want to train a model from scratch."
+        },
     )
 
 
@@ -158,8 +161,57 @@ class DataTrainingArguments:
     )
 
 
-align_list1 = []
-align_list2 = []
+# align_list1 = []
+# align_list2 = []
+# cnt = 0
+# op = ''
+
+
+def get_list(arg, model, count=0):
+    if arg in ["low_freq" "mid_freq" "high_freq" "nn_low_freq" "nn_mid_freq" "nn_high_freq"]:
+        with open('improve_list.json', 'r') as f:
+            improvement_lists = json.load(f)
+        list1 = improvement_lists[arg]
+        list2 = [i + 2000 for i in list1]
+
+    elif arg in ["freq", "iter_freq"]:
+        with open("data/cached_2000_NT_train.txt", 'rb') as f:
+            data = pickle.load(f)
+        freq_list = get_unigram_from_tokenized(data)
+        list1 = [i for i, j in freq_list.items() if i not in [0, 1, 2, 3, 4]]
+        with torch.no_grad():
+            e1 = model.bert.embeddings.word_embeddings.weight[:2000]
+            e2 = model.bert.embeddings.word_embeddings.weight[2000:]
+            ssm = e1 @ e2.T
+            ssm = ssm[list1]
+            list2 = torch.argmax(ssm, -1).tolist()
+            if arg == "freq":
+                return list1[:100], [i + 2000 for i in list2[:100]]
+            if arg == "iter_freq":
+                start = count // 500 * 50
+                return list1[start:start + 50], [i + 2000 for i in list2[start:start + 50]]
+
+    elif arg in ["dist", "iter_dist"]:
+        with torch.no_grad():
+            e1 = model.bert.embeddings.word_embeddings.weight[:2000]
+            e2 = model.bert.embeddings.word_embeddings.weight[2000:]
+            e1 /= torch.norm(e1, dim=-1, keepdim=True)
+            e2 /= torch.norm(e2, dim=-1, keepdim=True)
+            ssm = 1 - e1 @ e2.T
+            nns = torch.argmin(ssm, dim=-1)
+            dist = ssm[torch.arange(len(e1)), nns]
+            dist_list_1 = torch.argsort(dist).tolist()
+            dist_list_2 = nns[dist_list_1].tolist()
+            lists = [(i, j) for i, j in zip(dist_list_1, dist_list_2) if
+                     i not in [0, 1, 2, 3, 4] and j not in [0, 1, 2, 3, 4]]
+            list1, list2 = zip(*lists)
+            if arg == 'dist':
+                return list(list1[:100]), [i + 2000 for i in list2[:100]]
+            if arg == 'iter_dist':
+                start = count // 500 * 50
+                return list(list1[start:start + 50]), [ i + 2000 for i in list2[start:start + 50]]
+
+    return list1, list2
 
 
 class MyTrainer(Trainer):
@@ -169,17 +221,23 @@ class MyTrainer(Trainer):
 
         Subclass and override for custom behavior.
         """
+        # global cnt, align_list1, align_list2, op
         word_loss = torch.nn.MSELoss(reduction='sum')
         outputs = model(**inputs)
         # We don't use .loss here since the model may return tuples instead of ModelOutput.
         loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
-        new_loss = 0.5 * word_loss(
-            model.bert.embeddings.word_embeddings(
-                torch.tensor([align_list1], dtype=torch.long).to(self.args.device)),
-            model.bert.embeddings.word_embeddings(
-                torch.tensor([align_list2], dtype=torch.long).to(self.args.device))
-        )
-        loss = loss + new_loss
+        # if align_list1:
+        if self.args.align_list1:
+            new_loss = 0.5 * word_loss(
+                model.bert.embeddings.word_embeddings(
+                    torch.tensor([self.args.align_list1], dtype=torch.long).to(self.args.device)),
+                model.bert.embeddings.word_embeddings(
+                    torch.tensor([self.args.align_list2], dtype=torch.long).to(self.args.device)),
+            )
+            loss = loss + new_loss
+            self.args.improve_cnt += 1
+            if self.args.improve_cnt >= 500 and self.args.improve_cnt % 500 == 0 and len(self.args.align_list1) == 50:
+                self.args.align_list1, self.args.align_list2 = get_list(self.args.improve_op, model, self.args.improve_cnt)
         return (loss, outputs) if return_outputs else loss
 
 
@@ -279,37 +337,30 @@ def main():
             "and load it from here, using --tokenizer_name"
         )
     config.vocab_size = len(tokenizer)
-    if model_args.should_continue:
-        sorted_checkpoints = _sorted_checkpoints(training_args)
-        if len(sorted_checkpoints) == 0:
-            raise ValueError("Used --should_continue but no checkpoint was found in --output_dir.")
-        else:
-            model_args.model_name_or_path = os.path.join(sorted_checkpoints[-1], "pytorch_model.bin")
-    if model_args.model_name_or_path:
-        model = AutoModelWithLMHead.from_pretrained(
-            model_args.model_name_or_path,
-            from_tf=bool(".ckpt" in model_args.model_name_or_path),
-            config=config,
-            cache_dir=model_args.cache_dir,
-        )
+
+    sorted_checkpoints = _sorted_checkpoints_from_path(model_args.load_model_from)
+    if len(sorted_checkpoints) == 0:
+        raise ValueError("Used --should_continue but no checkpoint was found in --output_dir.")
     else:
-        if data_args.clm:
-            logger.info("Training new CLM model from scratch")
-            config.is_decoder = True
-            model = BertLMHeadModel(config)
-        else:
-            logger.info("Training new MLM model from scratch")
-            model = AutoModelWithLMHead.from_config(config)
+        model_args.model_name_or_path = os.path.join(sorted_checkpoints[-1], "pytorch_model.bin")
+
+    model = AutoModelWithLMHead.from_pretrained(
+        model_args.model_name_or_path,
+        from_tf=bool(".ckpt" in model_args.model_name_or_path),
+        config=config,
+        cache_dir=model_args.cache_dir,
+    )
 
     model.resize_token_embeddings(len(tokenizer))
 
-    with open('improve_list.json', 'r') as f:
-        improvement_lists = json.load(f)
-    global align_list1, align_list2
-    align_list1 = improvement_lists[model_args.improve_list]
     if len(tokenizer) != 4000:
         raise ValueError("we can only use improve list for same vocab")
-    align_list2 = [i + 2000 for i in align_list1]
+
+    # if not model_args.improve_list == "control":
+    #     global align_list1, align_list2, op
+    #     op = model_args.improve_list
+    #     align_list1, align_list2 = get_list(op, model)
+    #     logger.info(align_list1, align_list2.tolist())
 
     if data_args.block_size <= 0:
         raise ValueError("set --block_size")
@@ -342,7 +393,15 @@ def main():
                 tokenizer=tokenizer, mlm=data_args.mlm, mlm_probability=data_args.mlm_probability
             )
 
+    model.train()
     # Initialize our Trainer
+    training_args.improve_op = model_args.improve_list
+    align_list1, align_list2 = get_list(training_args.improve_op, model)
+    training_args.align_list1 = None if model_args.improve_list == "control" else align_list1
+    training_args.align_list2 = None if model_args.improve_list == "control" else align_list2
+    training_args.improve_cnt = 0
+    logger.info("{}\n{}".format(align_list1, align_list2))
+
     trainer = MyTrainer(
         model=model,
         args=training_args,

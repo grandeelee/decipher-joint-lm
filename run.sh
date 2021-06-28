@@ -7,7 +7,7 @@
 #SBATCH -n 4
 
 # domain, order, tok
-for seed in 0 7 11 31 41 51 101
+for seed in 31 41 51 101
 do
   sh expt_mlm.sh ${seed} 150 1000 cached_2000_NT_2000_NT 2000_2000
   sh expt_mlm.sh ${seed} 150 1000 cached_2000_NT_2000_OT 2000_2000

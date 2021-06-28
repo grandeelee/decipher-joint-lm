@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 
-WORKDIR="/home/grandee/grandee/projects/TACL_v1"
+WORKDIR=$(pwd)
 DATASET=${4}
 CONFIG="bert-tiny"
 TOKENIZER=${5}
 epoch=${2}
 save=${3}
 improve=${6}
+model=${7}
 export seed=${1}
 
 /home/grandee/anaconda3/envs/hf451/bin/python improve.py \
@@ -19,7 +20,7 @@ export seed=${1}
 	--do_train \
 	--do_eval \
 	--logging_dir runs/${DATASET}_mlm_${seed}_${improve} \
-	--per_gpu_train_batch_size 512 \
+	--per_gpu_train_batch_size 448 \
 	--num_train_epochs ${epoch} \
 	--warmup_steps 50 \
 	--logging_steps ${save} \
@@ -27,10 +28,11 @@ export seed=${1}
 	--overwrite_output_dir \
 	--block_size 128 \
 	--eval_data_file ${WORKDIR}/data/${DATASET}_valid.txt \
-	--per_gpu_eval_batch_size 512 \
+	--per_gpu_eval_batch_size 448 \
 	--seed ${seed} \
 	--gradient_accumulation_steps 1 \
 	--weight_decay 0.01 \
 	--adam_epsilon 1e-6 \
 	--learning_rate 2e-3 \
-	--improve_list ${improve}
+	--improve_list ${improve} \
+	--load_model_from ${model}
