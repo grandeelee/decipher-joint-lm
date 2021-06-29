@@ -6,7 +6,7 @@
 #SBATCH --mem-per-cpu=8000MB
 #SBATCH -n 4
 
-for nn in "freq" "dist" "iter_dist" "iter_freq" "control" "low_freq" "mid_freq" "high_freq" "nn_low_freq" "nn_mid_freq" "nn_high_freq"
+for nn in "dist" "iter_dist"
 do
   sh improve.sh 0 50 500 cached_2000_NT_2000_NT 2000_2000 ${nn} models/cached_2000_NT_2000_NT_mlm_0
   sh improve.sh 0 50 500 cached_2000_NT_2000_OT 2000_2000 ${nn} models/cached_2000_NT_2000_OT_mlm_0

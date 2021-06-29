@@ -168,7 +168,8 @@ class DataTrainingArguments:
 
 
 def get_list(arg, model, count=0):
-    if arg in ["low_freq" "mid_freq" "high_freq" "nn_low_freq" "nn_mid_freq" "nn_high_freq"]:
+    list1, list2 = [], []
+    if arg in ["low_freq", "mid_freq", "high_freq", "nn_low_freq", "nn_mid_freq", "nn_high_freq"]:
         with open('improve_list.json', 'r') as f:
             improvement_lists = json.load(f)
         list1 = improvement_lists[arg]
@@ -180,8 +181,8 @@ def get_list(arg, model, count=0):
         freq_list = get_unigram_from_tokenized(data)
         list1 = [i for i, j in freq_list.items() if i not in [0, 1, 2, 3, 4]]
         with torch.no_grad():
-            e1 = model.bert.embeddings.word_embeddings.weight[:2000]
-            e2 = model.bert.embeddings.word_embeddings.weight[2000:]
+            e1 = model.bert.embeddings.word_embeddings.weight[:2000].clone().detach()
+            e2 = model.bert.embeddings.word_embeddings.weight[2000:].clone().detach()
             ssm = e1 @ e2.T
             ssm = ssm[list1]
             list2 = torch.argmax(ssm, -1).tolist()
@@ -193,8 +194,8 @@ def get_list(arg, model, count=0):
 
     elif arg in ["dist", "iter_dist"]:
         with torch.no_grad():
-            e1 = model.bert.embeddings.word_embeddings.weight[:2000]
-            e2 = model.bert.embeddings.word_embeddings.weight[2000:]
+            e1 = model.bert.embeddings.word_embeddings.weight[:2000].clone().detach()
+            e2 = model.bert.embeddings.word_embeddings.weight[2000:].clone().detach()
             e1 /= torch.norm(e1, dim=-1, keepdim=True)
             e2 /= torch.norm(e2, dim=-1, keepdim=True)
             ssm = 1 - e1 @ e2.T
@@ -209,8 +210,9 @@ def get_list(arg, model, count=0):
                 return list(list1[:100]), [i + 2000 for i in list2[:100]]
             if arg == 'iter_dist':
                 start = count // 500 * 50
-                return list(list1[start:start + 50]), [ i + 2000 for i in list2[start:start + 50]]
-
+                return list(list1[start:start + 50]), [i + 2000 for i in list2[start:start + 50]]
+    logger.info("{}".format(arg))
+    logger.info("{}\n{}".format(list1, list2))
     return list1, list2
 
 
@@ -237,7 +239,9 @@ class MyTrainer(Trainer):
             loss = loss + new_loss
             self.args.improve_cnt += 1
             if self.args.improve_cnt >= 500 and self.args.improve_cnt % 500 == 0 and len(self.args.align_list1) == 50:
-                self.args.align_list1, self.args.align_list2 = get_list(self.args.improve_op, model, self.args.improve_cnt)
+                self.args.align_list1, self.args.align_list2 = get_list(self.args.improve_op,
+                                                                        model,
+                                                                        self.args.improve_cnt)
         return (loss, outputs) if return_outputs else loss
 
 
@@ -397,10 +401,9 @@ def main():
     # Initialize our Trainer
     training_args.improve_op = model_args.improve_list
     align_list1, align_list2 = get_list(training_args.improve_op, model)
-    training_args.align_list1 = None if model_args.improve_list == "control" else align_list1
-    training_args.align_list2 = None if model_args.improve_list == "control" else align_list2
+    training_args.align_list1 = align_list1
+    training_args.align_list2 = align_list2
     training_args.improve_cnt = 0
-    logger.info("{}\n{}".format(align_list1, align_list2))
 
     trainer = MyTrainer(
         model=model,
